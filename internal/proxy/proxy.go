@@ -336,6 +336,9 @@ func RunProxyRelay(relayAddr string, socksAddr string, secret string) {
 	if _, err := rawConn.Write([]byte("REGISTER")); err != nil {
 		logger.Fatalf("Register header send error: %v", err)
 	}
+	if err := answerRelayChallenge(rawConn, secret); err != nil {
+		logger.Fatalf("Relay auth failed: %v", err)
+	}
 	// secure handshake as server
 	secureConn, err := NewSecureServerConn(rawConn, secret)
 	if err != nil {

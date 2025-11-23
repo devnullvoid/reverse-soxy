@@ -1,6 +1,6 @@
 module github.com/lonepie/reverse-soxy
 
-go 1.24
+go 1.25
 
 require (
 	github.com/fatih/color v1.13.0

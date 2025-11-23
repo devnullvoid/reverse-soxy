@@ -156,9 +156,11 @@ tunnel_addr: proxy.host:9000
 
 ## Security
 
-- Uses AES-CTR with separate IVs for encrypt/decrypt.
-- HMAC-SHA256 handshake to authenticate peers.
+- Uses AES-CTR with separate IVs for encrypt/decrypt and fresh IVs per connection.
+- Performs an HMAC-SHA256 challenge/response handshake to authenticate peers and block replay attempts.
 - High-entropy ciphertext; no plaintext leaks over the tunnel.
+- Provide a high-entropy shared secret (at least 32 random bytes) and rotate it periodically.
+- Relay registrations and agent attachments complete a pre-tunnel HMAC challenge so only trusted peers can bind to the relay.
 
 ## License
 

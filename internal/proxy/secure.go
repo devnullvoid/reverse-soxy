@@ -14,6 +14,9 @@ import (
 
 var errAuthFailed = errors.New("authentication failed")
 
+const handshakeTimeout = 2 * time.Minute
+const handshakeChallengeSize = sha256.Size
+
 func deriveKey(secret string) []byte {
 	h := sha256.Sum256([]byte(secret))
 	return h[:]
@@ -36,9 +39,15 @@ func (s *secureConn) Write(p []byte) (int, error) {
 // NewSecureClientConn performs HMAC auth and AES-CTR encryption on a client-side tunnel connection
 func NewSecureClientConn(conn net.Conn, secret string) (net.Conn, error) {
 	key := deriveKey(secret)
-	// send HMAC handshake
+	conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	defer conn.SetDeadline(time.Time{})
+	// read server challenge and respond with HMAC to prevent replay
+	challenge := make([]byte, handshakeChallengeSize)
+	if _, err := io.ReadFull(conn, challenge); err != nil {
+		return nil, err
+	}
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("handshake"))
+	mac.Write(challenge)
 	if _, err := conn.Write(mac.Sum(nil)); err != nil {
 		return nil, err
 	}
@@ -62,8 +71,6 @@ func NewSecureClientConn(conn net.Conn, secret string) (net.Conn, error) {
 	if _, err := conn.Write(ivDec); err != nil {
 		return nil, err
 	}
-	// clear deadlines after handshake
-	conn.SetDeadline(time.Time{})
 	// create independent CTR streams
 	enc := cipher.NewCTR(block, ivEnc)
 	dec := cipher.NewCTR(block, ivDec)
@@ -73,15 +80,23 @@ func NewSecureClientConn(conn net.Conn, secret string) (net.Conn, error) {
 // NewSecureServerConn performs HMAC auth and AES-CTR encryption on a server-side tunnel connection
 func NewSecureServerConn(conn net.Conn, secret string) (net.Conn, error) {
 	key := deriveKey(secret)
-	// read HMAC handshake
-	expectedMacLen := sha256.Size
-	bufMac := make([]byte, expectedMacLen)
-	if _, err := io.ReadFull(conn, bufMac); err != nil {
+	conn.SetDeadline(time.Now().Add(handshakeTimeout))
+	defer conn.SetDeadline(time.Time{})
+	// send challenge to defend against replayed handshakes
+	challenge := make([]byte, handshakeChallengeSize)
+	if _, err := rand.Read(challenge); err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(challenge); err != nil {
 		return nil, err
 	}
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte("handshake"))
-	if !hmac.Equal(bufMac, mac.Sum(nil)) {
+	mac.Write(challenge)
+	recvMac := make([]byte, mac.Size())
+	if _, err := io.ReadFull(conn, recvMac); err != nil {
+		return nil, err
+	}
+	if !hmac.Equal(recvMac, mac.Sum(nil)) {
 		return nil, errAuthFailed
 	}
 	// read IVs from client

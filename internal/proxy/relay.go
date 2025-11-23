@@ -1,11 +1,15 @@
 package proxy
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lonepie/reverse-soxy/internal/logger"
 )
@@ -43,12 +47,77 @@ func handleRelayConn(conn net.Conn, secret string) {
 	header := strings.TrimSpace(string(hdr))
 	switch header {
 	case "REGISTER":
+		if err := verifyRelayPeer(conn, secret); err != nil {
+			logger.Error("Relay REGISTER auth failed: %v", err)
+			return
+		}
 		registerProxy(conn)
 	case "AGENT":
+		if err := verifyRelayPeer(conn, secret); err != nil {
+			logger.Error("Relay AGENT auth failed: %v", err)
+			return
+		}
 		handleAgent(conn)
 	default:
 		logger.Error("Unknown relay header: %s", header)
 	}
+}
+
+const relayAuthTimeout = 10 * time.Second
+
+func verifyRelayPeer(conn net.Conn, secret string) error {
+	if secret == "" {
+		return errAuthFailed
+	}
+	if err := conn.SetDeadline(time.Now().Add(relayAuthTimeout)); err != nil {
+		return err
+	}
+	defer conn.SetDeadline(time.Time{})
+
+	challenge := make([]byte, handshakeChallengeSize)
+	if _, err := rand.Read(challenge); err != nil {
+		return err
+	}
+	if _, err := conn.Write(challenge); err != nil {
+		return err
+	}
+
+	expected := hmac.New(sha256.New, deriveKey(secret))
+	expected.Write(challenge)
+
+	response := make([]byte, expected.Size())
+	if _, err := io.ReadFull(conn, response); err != nil {
+		return err
+	}
+	if !hmac.Equal(response, expected.Sum(nil)) {
+		return errAuthFailed
+	}
+
+	return nil
+}
+
+func answerRelayChallenge(conn net.Conn, secret string) error {
+	if secret == "" {
+		return errAuthFailed
+	}
+	if err := conn.SetDeadline(time.Now().Add(relayAuthTimeout)); err != nil {
+		return err
+	}
+	defer conn.SetDeadline(time.Time{})
+
+	challenge := make([]byte, handshakeChallengeSize)
+	if _, err := io.ReadFull(conn, challenge); err != nil {
+		return err
+	}
+
+	mac := hmac.New(sha256.New, deriveKey(secret))
+	mac.Write(challenge)
+
+	if _, err := conn.Write(mac.Sum(nil)); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func registerProxy(conn net.Conn) {
@@ -117,6 +186,9 @@ func RunRegister(relayAddr, secret string) {
 	}
 	defer conn.Close()
 	conn.Write([]byte("REGISTER"))
+	if err := answerRelayChallenge(conn, secret); err != nil {
+		logger.Fatalf("Register auth failed: %v", err)
+	}
 	logger.Info("Registered with relay %s", relayAddr)
 	select {} // hold open
 }

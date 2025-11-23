@@ -53,6 +53,12 @@ func RunAgentRelay(relayAddr, secret string, maxRetries int) {
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		if err := answerRelayChallenge(rawConn, secret); err != nil {
+			rawConn.Close()
+			logger.Error("AgentRelay auth failed: %v", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
 		// secure handshake
 		secureConn, err := NewSecureClientConn(rawConn, secret)
 		if err != nil {
